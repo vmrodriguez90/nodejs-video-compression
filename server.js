@@ -1,50 +1,100 @@
-const express = require("express");
-const cors = require("cors");
 const { fork } = require("child_process");
-const fileUpload = require("express-fileupload");
+let args = process.argv;
+const path = require("path");
+const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
+const ffmpeg = require('fluent-ffmpeg');
+ffmpeg.setFfmpegPath(ffmpegPath);
+const fs = require("fs");
+let arg = (args.slice(2));
+let videoPath = arg[0].replace("path=",""); 
+var fileList = [];
+const batchSize = 5;
 
-// Create a new express application instance
-const PORT = 5000;
-const app = express();
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(
-  fileUpload({
-    tempFileDir: "temp",
-    useTempFiles: true,
-  })
-);
-
-// Routes
-app.get("/", (req, res) => {
-  res.send("Hello World!");
-});
-
-app.post("/compress-video", (req, res) => {
-  const video = req.files.video;
-
-  // When file is uploaded it is stored in temp file
-  // this is made possible by express-fileupload
-  const tempFilePath = video.tempFilePath;
-
-  if (video && tempFilePath) {
-    // Create a new child process
-    const child = fork("video.js");
-    // Send message to child process
-    child.send({ tempFilePath, name: video.name });
-    // Listen for message from child process
-    child.on("message", (message) => {
-      const { statusCode, text } = message;
-      res.status(statusCode).send(text);
-    });
+fs.readdir(videoPath, (err, files) => {
+  if (err) {
+    console.log("Error getting directory information.")
   } else {
-    res.status(400).send("No file uploaded");
+    convertFilesInBatches(files, batchSize);
   }
 });
 
-// Start the server
-app.listen(PORT, () => {
-  console.log(`Server started on  http://localhost:${PORT}`);
-});
+// Function to convert a single file
+function convertFile(inputFilePath, outputFilePath) {
+ 
+}
+
+// Function to convert files in batches
+function convertFilesInBatches(fileList, batchSize) {
+  const totalFiles = fileList.length;
+  console.log("Total Files: ", totalFiles);
+  let batchCount = Math.ceil(totalFiles / batchSize);
+
+  // Helper function to process a single batch
+  function processBatch(batch) {
+    return new Promise((resolve, reject) => {
+      const promises = batch.map(file => {
+        const inputFilePath = file;
+        let outputFilePath = 'converted\\' + file ;
+
+        return new Promise((resolve, reject) => {
+          console.log(inputFilePath);
+          outputFilePath = outputFilePath.replace(".MTS",'.MP4');
+          ffmpeg(videoPath + '\\' + inputFilePath)
+          .fps(30)
+          .addOptions(["-crf 28"])
+          .on("end", () => {
+            console.log(`File converted: ${inputFilePath} -> ${outputFilePath}`);
+            fs.unlink(videoPath + '\\' + inputFilePath, (err) => {
+              if (!err) {
+                console.log(`File deleted: ${inputFilePath}`);
+              }
+            });
+            resolve();
+          })
+          .on("error", (err) => {
+            console.log('Error on converting the file', err);
+            reject();
+          })
+          .save(videoPath + '\\' + outputFilePath);       
+        });
+      });
+
+      Promise.all(promises)
+        .then(resolve)
+        .catch(reject);
+    });
+  }
+
+  // Process each batch sequentially
+  function processBatchesSequentially(batches) {
+    if (batches.length === 0) {
+      console.log('All batches processed.');
+      return;
+    }
+
+    const batch = batches.shift();
+
+    processBatch(batch)
+      .then(() => {
+        processBatchesSequentially(batches);
+      })
+      .catch(error => {
+        console.error('Error processing batch:', error);
+      });
+  }
+
+  // Create an array of file batches
+  const fileBatches = [];
+  for (let i = 0; i < batchCount; i++) {
+    const startIdx = i * batchSize;
+    const endIdx = Math.min(startIdx + batchSize, totalFiles);
+    const batch = fileList.slice(startIdx, endIdx);
+    fileBatches.push(batch);
+  }
+
+  // Process the batches sequentially
+  processBatchesSequentially(fileBatches);
+}
+
+// Example usage
+
